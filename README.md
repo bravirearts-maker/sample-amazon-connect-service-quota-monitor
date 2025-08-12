@@ -322,20 +322,6 @@ This project is licensed under the MIT-0 License - see the [LICENSE](LICENSE) fi
 4. Test thoroughly
 5. Submit a pull request
 
-## 🛡️ Security Improvements
-
-This solution addresses all high-severity security findings and implements enterprise-grade security:
-
-- ✅ **SNS Topic Encryption**: KMS encryption for all alert messages
-- ✅ **DynamoDB KMS Encryption**: Customer-managed keys for data at rest
-- ✅ **Lambda Environment Encryption**: KMS encryption for environment variables
-- ✅ **Dead Letter Queue**: SQS DLQ for failed Lambda executions
-- ✅ **VPC Support**: Optional VPC deployment with security groups
-- ✅ **S3 Access Logging**: Comprehensive audit trails
-- ✅ **Concurrency Limits**: Lambda reserved concurrency to prevent abuse
-- ✅ **Point-in-Time Recovery**: DynamoDB backup and recovery
-
-For detailed security information, see [SECURITY_IMPROVEMENTS.md](SECURITY_IMPROVEMENTS.md).
 
 ## 📚 Documentation
 
