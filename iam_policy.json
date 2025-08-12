@@ -1,0 +1,90 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "connect:ListInstances",
+                "connect:ListUsers",
+                "connect:ListQueues",
+                "connect:ListPhoneNumbers",
+                "connect:ListHoursOfOperations",
+                "connect:ListContactFlows",
+                "connect:ListRoutingProfiles",
+                "connect:ListSecurityProfiles",
+                "connect:ListQuickConnects",
+                "connect:DescribeUserHierarchyStructure",
+                "connect:ListAgentStatuses",
+                "connect:ListPrompts",
+                "connect:ListTasks",
+                "connect:ListTaskTemplates",
+                "connect:ListEvaluationForms",
+                "connect:ListPhoneNumbersV2"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "connectcases:ListDomains",
+                "connectcases:ListFields",
+                "connectcases:ListTemplates"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "profile:ListDomains",
+                "profile:ListProfileObjectTypes"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "voiceid:ListDomains",
+                "voiceid:ListSpeakers",
+                "voiceid:ListFraudsters"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "wisdom:ListKnowledgeBases",
+                "wisdom:ListContent"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "connect-campaigns:ListCampaigns"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "servicequotas:ListServiceQuotas"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "cloudwatch:GetMetricStatistics"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "sns:Publish",
+                "sns:GetTopicAttributes"
+            ],
+            "Resource": "arn:aws:sns:*:*:ConnectQuotaAlerts*"
+        }
+    ]
+}

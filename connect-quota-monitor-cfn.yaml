@@ -1,0 +1,539 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Amazon Connect Service Quota Monitor - Monitors Amazon Connect service quotas and sends alerts when utilization reaches threshold'
+
+Parameters:
+  ThresholdPercentage:
+    Type: Number
+    Default: 80
+    Description: Percentage threshold for quota utilization alerts (default 80%)
+    MinValue: 1
+    MaxValue: 99
+    
+  LambdaTimeout:
+    Type: Number
+    Default: 300
+    Description: Lambda function timeout in seconds
+    MinValue: 30
+    MaxValue: 900
+    
+  LambdaMemory:
+    Type: Number
+    Default: 256
+    Description: Lambda function memory in MB
+    MinValue: 128
+    MaxValue: 10240
+    
+  ScheduleExpression:
+    Type: String
+    Default: rate(1 hour)
+    Description: Schedule expression for automated Lambda execution (e.g., rate(1 hour), rate(30 minutes), cron(0 8 * * ? *))
+    
+  UseS3Storage:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: Whether to use S3 for storing metrics and reports
+    
+  UseDynamoDBStorage:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: Whether to use DynamoDB for storing metrics and reports
+    
+  S3BucketName:
+    Type: String
+    Default: ''
+    Description: (Optional) Name for the S3 bucket. Leave empty to auto-generate a name.
+    
+  DynamoDBTableName:
+    Type: String
+    Default: 'ConnectQuotaMonitor'
+    Description: Name for the DynamoDB table
+    
+  SNSTopicName:
+    Type: String
+    Default: 'ConnectQuotaAlerts'
+    Description: Name for the SNS topic for alerts
+    
+  NotificationEmail:
+    Type: String
+    Default: ''
+    Description: (Optional) Email address to subscribe to the SNS topic for alerts
+    
+  VpcId:
+    Type: String
+    Default: ''
+    Description: (Optional) VPC ID for Lambda function deployment. Leave empty to deploy without VPC.
+    
+  SubnetIds:
+    Type: CommaDelimitedList
+    Default: ''
+    Description: (Optional) Comma-delimited list of subnet IDs for Lambda function deployment. Required if VpcId is specified.
+
+Conditions:
+  UseS3: !Equals [!Ref UseS3Storage, 'true']
+  UseDynamoDB: !Equals [!Ref UseDynamoDBStorage, 'true']
+  CreateS3Bucket: !And [!Equals [!Ref UseS3Storage, 'true'], !Equals [!Ref S3BucketName, '']]
+  UseProvidedS3Bucket: !And [!Equals [!Ref UseS3Storage, 'true'], !Not [!Equals [!Ref S3BucketName, '']]]
+  SubscribeEmail: !Not [!Equals [!Ref NotificationEmail, '']]
+  UseVPC: !Not [!Equals [!Ref VpcId, '']]
+
+Resources:
+  # KMS Key for SNS Topic encryption
+  SNSKMSKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: KMS key for SNS topic encryption
+      KeyPolicy:
+        Statement:
+          - Sid: Enable IAM User Permissions
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+          - Sid: Allow SNS service
+            Effect: Allow
+            Principal:
+              Service: sns.amazonaws.com
+            Action:
+              - kms:Decrypt
+              - kms:GenerateDataKey
+            Resource: '*'
+
+  SNSKMSKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub 'alias/${AWS::StackName}-sns-key'
+      TargetKeyId: !Ref SNSKMSKey
+
+  # SNS Topic for alerts
+  AlertSNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Ref SNSTopicName
+      DisplayName: 'Connect Quota Alerts'
+      KmsMasterKeyId: !Ref SNSKMSKey
+      Tags:
+        - Key: Purpose
+          Value: ConnectQuotaMonitor
+
+  # Email subscription to SNS topic (if email provided)
+  EmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: SubscribeEmail
+    Properties:
+      TopicArn: !Ref AlertSNSTopic
+      Protocol: email
+      Endpoint: !Ref NotificationEmail
+
+  # S3 Bucket for access logs
+  S3AccessLogsBucket:
+    Type: AWS::S3::Bucket
+    Condition: CreateS3Bucket
+    DeletionPolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Purpose
+          Value: ConnectQuotaMonitorAccessLogs
+
+  # S3 Bucket for metrics and reports (if enabled)
+  MetricsS3Bucket:
+    Type: AWS::S3::Bucket
+    Condition: CreateS3Bucket
+    DeletionPolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LoggingConfiguration:
+        DestinationBucketName: !Ref S3AccessLogsBucket
+        LogFilePrefix: access-logs/
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireOldReports
+            Status: Enabled
+            Prefix: connect-reports/
+            ExpirationInDays: 365
+          - Id: ExpireOldMetrics
+            Status: Enabled
+            Prefix: connect-metrics/
+            ExpirationInDays: 365
+      Tags:
+        - Key: Purpose
+          Value: ConnectQuotaMonitor
+
+  # KMS Key for DynamoDB encryption
+  DynamoDBKMSKey:
+    Type: AWS::KMS::Key
+    Condition: UseDynamoDB
+    Properties:
+      Description: KMS key for DynamoDB table encryption
+      KeyPolicy:
+        Statement:
+          - Sid: Enable IAM User Permissions
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+          - Sid: Allow DynamoDB service
+            Effect: Allow
+            Principal:
+              Service: dynamodb.amazonaws.com
+            Action:
+              - kms:Decrypt
+              - kms:GenerateDataKey
+            Resource: '*'
+
+  DynamoDBKMSKeyAlias:
+    Type: AWS::KMS::Alias
+    Condition: UseDynamoDB
+    Properties:
+      AliasName: !Sub 'alias/${AWS::StackName}-dynamodb-key'
+      TargetKeyId: !Ref DynamoDBKMSKey
+
+  # DynamoDB Table for metrics and reports (if enabled)
+  MetricsDynamoDBTable:
+    Type: AWS::DynamoDB::Table
+    Condition: UseDynamoDB
+    Properties:
+      TableName: !Ref DynamoDBTableName
+      BillingMode: PROVISIONED
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+        - AttributeName: timestamp
+          AttributeType: S
+        - AttributeName: instance_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+        - AttributeName: timestamp
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: InstanceIdIndex
+          KeySchema:
+            - AttributeName: instance_id
+              KeyType: HASH
+            - AttributeName: timestamp
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+          ProvisionedThroughput:
+            ReadCapacityUnits: 5
+            WriteCapacityUnits: 5
+      SSESpecification:
+        SSEEnabled: true
+        KMSMasterKeyId: !Ref DynamoDBKMSKey
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      Tags:
+        - Key: Purpose
+          Value: ConnectQuotaMonitor
+
+  # IAM Role for Lambda function
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-LambdaRole"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - !If [UseVPC, 'arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole', !Ref 'AWS::NoValue']
+      Policies:
+        - PolicyName: ConnectQuotaMonitorPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - connect:ListInstances
+                  - connect:ListUsers
+                  - connect:ListQueues
+                  - connect:ListPhoneNumbers
+                  - connect:ListHoursOfOperations
+                  - connect:ListContactFlows
+                  - connect:ListRoutingProfiles
+                  - connect:ListSecurityProfiles
+                  - connect:ListQuickConnects
+                  - connect:DescribeUserHierarchyStructure
+                  - connect:ListAgentStatuses
+                  - connect:ListPrompts
+                  - connect:ListTasks
+                  - connect:ListTaskTemplates
+                  - connect:ListEvaluationForms
+                  - connect:ListPhoneNumbersV2
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - connectcases:ListDomains
+                  - connectcases:ListFields
+                  - connectcases:ListTemplates
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - profile:ListDomains
+                  - profile:ListProfileObjectTypes
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - voiceid:ListDomains
+                  - voiceid:ListSpeakers
+                  - voiceid:ListFraudsters
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - wisdom:ListKnowledgeBases
+                  - wisdom:ListContent
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - connect-campaigns:ListCampaigns
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - servicequotas:ListServiceQuotas
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - cloudwatch:GetMetricStatistics
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                  - sns:GetTopicAttributes
+                Resource: !Ref AlertSNSTopic
+              - Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                Resource: !GetAtt LambdaDeadLetterQueue.Arn
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:GenerateDataKey
+                Resource: 
+                  - !GetAtt LambdaKMSKey.Arn
+                  - !GetAtt SNSKMSKey.Arn
+                  - !If [UseDynamoDB, !GetAtt DynamoDBKMSKey.Arn, !Ref 'AWS::NoValue']
+        - PolicyName: S3StoragePolicy
+          Condition: UseS3
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !If 
+                    - CreateS3Bucket
+                    - !Sub "arn:aws:s3:::${MetricsS3Bucket}"
+                    - !Sub "arn:aws:s3:::${S3BucketName}"
+                  - !If 
+                    - CreateS3Bucket
+                    - !Sub "arn:aws:s3:::${MetricsS3Bucket}/*"
+                    - !Sub "arn:aws:s3:::${S3BucketName}/*"
+        - PolicyName: DynamoDBStoragePolicy
+          Condition: UseDynamoDB
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:GetItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                  - dynamodb:CreateTable
+                  - dynamodb:DescribeTable
+                Resource:
+                  - !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamoDBTableName}"
+                  - !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamoDBTableName}/index/*"
+
+  # KMS Key for Lambda environment variables encryption
+  LambdaKMSKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: KMS key for Lambda environment variables encryption
+      KeyPolicy:
+        Statement:
+          - Sid: Enable IAM User Permissions
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: 'kms:*'
+            Resource: '*'
+          - Sid: Allow Lambda service
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action:
+              - kms:Decrypt
+              - kms:GenerateDataKey
+            Resource: '*'
+
+  LambdaKMSKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub 'alias/${AWS::StackName}-lambda-key'
+      TargetKeyId: !Ref LambdaKMSKey
+
+  # Security Group for Lambda (if VPC is used)
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: UseVPC
+    Properties:
+      GroupDescription: Security group for Connect Quota Monitor Lambda function
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: HTTPS outbound for AWS API calls
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-Lambda-SG"
+        - Key: Purpose
+          Value: ConnectQuotaMonitor
+
+  # SQS Dead Letter Queue for Lambda
+  LambdaDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${AWS::StackName}-ConnectQuotaMonitor-DLQ"
+      MessageRetentionPeriod: 1209600  # 14 days
+      KmsMasterKeyId: alias/aws/sqs
+      Tags:
+        - Key: Purpose
+          Value: ConnectQuotaMonitorDLQ
+
+  # Lambda Function
+  QuotaMonitorLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-ConnectQuotaMonitor"
+      Handler: lambda_function.main
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: python3.9
+      Timeout: !Ref LambdaTimeout
+      MemorySize: !Ref LambdaMemory
+      ReservedConcurrencyLimit: 5
+      DeadLetterConfig:
+        TargetArn: !GetAtt LambdaDeadLetterQueue.Arn
+      KmsKeyArn: !GetAtt LambdaKMSKey.Arn
+      VpcConfig: !If
+        - UseVPC
+        - SecurityGroupIds:
+            - !Ref LambdaSecurityGroup
+          SubnetIds: !Ref SubnetIds
+        - !Ref AWS::NoValue
+      Environment:
+        Variables:
+          ALERT_SNS_TOPIC_ARN: !Ref AlertSNSTopic
+          THRESHOLD_PERCENTAGE: !Ref ThresholdPercentage
+          S3_BUCKET: !If [UseProvidedS3Bucket, !Ref S3BucketName, !If [CreateS3Bucket, !Ref MetricsS3Bucket, '']]
+          USE_DYNAMODB: !Ref UseDynamoDBStorage
+          DYNAMODB_TABLE: !Ref DynamoDBTableName
+      Code:
+        ZipFile: |
+          # Placeholder Lambda function
+          # The actual monitoring code should be deployed using the deployment script
+          import json
+          import logging
+          
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+          
+          def main(event, context):
+              logger.info("Connect Quota Monitor placeholder function")
+              logger.info("Please deploy the actual monitoring code using:")
+              logger.info("1. The deploy.sh script, or")
+              logger.info("2. Update the function code manually")
+              
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps({
+                      'message': 'Placeholder function - please deploy actual code',
+                      'instructions': 'Use deploy.sh script to update with monitoring code'
+                  })
+              }
+
+  # CloudWatch Event Rule to trigger Lambda on schedule
+  ScheduledRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${AWS::StackName}-Schedule"
+      Description: "Scheduled rule to trigger Connect Quota Monitor Lambda"
+      ScheduleExpression: !Ref ScheduleExpression
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt QuotaMonitorLambda.Arn
+          Id: "ConnectQuotaMonitorTarget"
+
+  # Permission for CloudWatch Events to invoke Lambda
+  LambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref QuotaMonitorLambda
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt ScheduledRule.Arn
+
+Outputs:
+  LambdaFunction:
+    Description: "Lambda function that monitors Connect quotas"
+    Value: !Ref QuotaMonitorLambda
+    
+  SNSTopicArn:
+    Description: "SNS topic ARN for alerts"
+    Value: !Ref AlertSNSTopic
+    
+  S3BucketName:
+    Description: "S3 bucket for metrics and reports"
+    Value: !If [CreateS3Bucket, !Ref MetricsS3Bucket, !If [UseProvidedS3Bucket, !Ref S3BucketName, "Not using S3 storage"]]
+    Condition: UseS3
+    
+  DynamoDBTableName:
+    Description: "DynamoDB table for metrics and reports"
+    Value: !Ref DynamoDBTableName
+    Condition: UseDynamoDB
+    
+  DeadLetterQueueUrl:
+    Description: "Dead Letter Queue URL for failed Lambda executions"
+    Value: !Ref LambdaDeadLetterQueue
+    
+  SecurityConfiguration:
+    Description: "Security features enabled"
+    Value: "SNS encryption, DynamoDB encryption with KMS, Lambda environment encryption, Dead Letter Queue, S3 access logging"
+    
+  SubscribeToAlerts:
+    Description: "Command to subscribe to alerts"
+    Value: !Sub "aws sns subscribe --topic-arn ${AlertSNSTopic} --protocol email --notification-endpoint your-email@example.com"
