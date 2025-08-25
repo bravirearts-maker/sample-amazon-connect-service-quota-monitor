@@ -244,12 +244,58 @@ Resources:
             WriteCapacityUnits: 5
       SSESpecification:
         SSEEnabled: true
+        SSEType: KMS
         KMSMasterKeyId: !Ref DynamoDBKMSKey
       PointInTimeRecoverySpecification:
         PointInTimeRecoveryEnabled: true
       Tags:
         - Key: Purpose
           Value: ConnectQuotaMonitor
+
+  # S3 Storage Policy (conditional)
+  S3StoragePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Condition: UseS3
+    Properties:
+      ManagedPolicyName: !Sub "${AWS::StackName}-S3StoragePolicy"
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:PutObject
+              - s3:GetObject
+              - s3:ListBucket
+            Resource:
+              - !If 
+                - CreateS3Bucket
+                - !Sub "arn:aws:s3:::${MetricsS3Bucket}"
+                - !Sub "arn:aws:s3:::${S3BucketName}"
+              - !If 
+                - CreateS3Bucket
+                - !Sub "arn:aws:s3:::${MetricsS3Bucket}/*"
+                - !Sub "arn:aws:s3:::${S3BucketName}/*"
+
+  # DynamoDB Storage Policy (conditional)
+  DynamoDBStoragePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Condition: UseDynamoDB
+    Properties:
+      ManagedPolicyName: !Sub "${AWS::StackName}-DynamoDBStoragePolicy"
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - dynamodb:PutItem
+              - dynamodb:GetItem
+              - dynamodb:Query
+              - dynamodb:Scan
+              - dynamodb:CreateTable
+              - dynamodb:DescribeTable
+            Resource:
+              - !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamoDBTableName}"
+              - !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamoDBTableName}/index/*"
 
   # IAM Role for Lambda function
   LambdaExecutionRole:
@@ -266,6 +312,8 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
         - !If [UseVPC, 'arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole', !Ref 'AWS::NoValue']
+        - !If [UseS3, !Ref S3StoragePolicy, !Ref 'AWS::NoValue']
+        - !If [UseDynamoDB, !Ref DynamoDBStoragePolicy, !Ref 'AWS::NoValue']
       Policies:
         - PolicyName: ConnectQuotaMonitorPolicy
           PolicyDocument:
@@ -341,41 +389,7 @@ Resources:
                   - !GetAtt LambdaKMSKey.Arn
                   - !GetAtt SNSKMSKey.Arn
                   - !If [UseDynamoDB, !GetAtt DynamoDBKMSKey.Arn, !Ref 'AWS::NoValue']
-        - PolicyName: S3StoragePolicy
-          Condition: UseS3
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - s3:PutObject
-                  - s3:GetObject
-                  - s3:ListBucket
-                Resource:
-                  - !If 
-                    - CreateS3Bucket
-                    - !Sub "arn:aws:s3:::${MetricsS3Bucket}"
-                    - !Sub "arn:aws:s3:::${S3BucketName}"
-                  - !If 
-                    - CreateS3Bucket
-                    - !Sub "arn:aws:s3:::${MetricsS3Bucket}/*"
-                    - !Sub "arn:aws:s3:::${S3BucketName}/*"
-        - PolicyName: DynamoDBStoragePolicy
-          Condition: UseDynamoDB
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - dynamodb:PutItem
-                  - dynamodb:GetItem
-                  - dynamodb:Query
-                  - dynamodb:Scan
-                  - dynamodb:CreateTable
-                  - dynamodb:DescribeTable
-                Resource:
-                  - !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamoDBTableName}"
-                  - !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamoDBTableName}/index/*"
+
 
   # KMS Key for Lambda environment variables encryption
   LambdaKMSKey:
