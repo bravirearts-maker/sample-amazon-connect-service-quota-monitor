@@ -25,8 +25,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler('connect_quota_monitor.log')
+        logging.StreamHandler(sys.stdout)
     ]
 )
 logger = logging.getLogger('connect-quota-monitor')
@@ -1441,3 +1440,109 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+def main(event=None, context=None):
+    """
+    Main Lambda handler function
+    """
+    try:
+        # Get environment variables
+        threshold = int(os.environ.get('THRESHOLD_PERCENTAGE', '80'))
+        sns_topic_arn = os.environ.get('ALERT_SNS_TOPIC_ARN')
+        s3_bucket = os.environ.get('S3_BUCKET', '')
+        use_dynamodb = os.environ.get('USE_DYNAMODB', 'false').lower() == 'true'
+        dynamodb_table = os.environ.get('DYNAMODB_TABLE', 'ConnectQuotaMonitor')
+        
+        logger.info(f"Starting Connect Quota Monitor execution {EXECUTION_ID}")
+        logger.info(f"Configuration: threshold={threshold}%, SNS={bool(sns_topic_arn)}, S3={bool(s3_bucket)}, DynamoDB={use_dynamodb}")
+        
+        # Initialize the monitor
+        monitor = ConnectQuotaMonitor(sns_topic_arn=sns_topic_arn)
+        
+        # Get all Connect instances
+        instances = monitor.get_connect_instances()
+        if not instances:
+            logger.warning("No Connect instances found in this region")
+            return {
+                'statusCode': 200,
+                'body': json.dumps({
+                    'message': 'No Connect instances found',
+                    'execution_id': EXECUTION_ID
+                })
+            }
+        
+        logger.info(f"Found {len(instances)} Connect instance(s)")
+        
+        # Monitor quotas for all instances
+        all_results = []
+        alert_count = 0
+        
+        for instance in instances:
+            instance_id = instance['Id']
+            instance_name = instance.get('InstanceAlias', instance_id)
+            
+            logger.info(f"Monitoring quotas for instance: {instance_name} ({instance_id})")
+            
+            # Get quota utilization for this instance
+            results = monitor.check_quota_utilization(instance_id, threshold)
+            
+            # Add instance info to results
+            for result in results:
+                result['instance_id'] = instance_id
+                result['instance_name'] = instance_name
+                all_results.append(result)
+                
+                if result['utilization_percentage'] >= threshold:
+                    alert_count += 1
+        
+        # Prepare report data
+        report_data = {
+            'execution_id': EXECUTION_ID,
+            'timestamp': datetime.utcnow().isoformat(),
+            'threshold_percentage': threshold,
+            'instances_monitored': len(instances),
+            'total_quotas_checked': len(all_results),
+            'quotas_above_threshold': alert_count,
+            'results': all_results,
+            'alert_count': alert_count
+        }
+        
+        # Save to S3 if configured
+        if s3_bucket and monitor.s3_client:
+            report_location = save_report_to_s3(monitor.s3_client, s3_bucket, report_data)
+            logger.info(f"Report saved to S3: {report_location}")
+            
+        # Save to DynamoDB if configured
+        if use_dynamodb and monitor.dynamodb_client and dynamodb_table:
+            save_report_to_dynamodb(monitor.dynamodb_client, dynamodb_table, report_data)
+            logger.info(f"Report saved to DynamoDB: {dynamodb_table}")
+        
+        logger.info(f"Connect Quota Monitor execution {EXECUTION_ID} completed successfully")
+        
+        return {
+            'statusCode': 200,
+            'body': json.dumps({
+                'message': 'Quota monitoring completed successfully',
+                'execution_id': EXECUTION_ID,
+                'instances_monitored': len(instances),
+                'quotas_checked': len(all_results),
+                'alerts_triggered': alert_count,
+                'threshold_percentage': threshold
+            })
+        }
+        
+    except Exception as e:
+        error_msg = f"Error in Lambda handler: {sanitize_log(str(e))}"
+        logger.error(error_msg)
+        
+        return {
+            'statusCode': 500,
+            'body': json.dumps({
+                'error': 'Internal server error',
+                'execution_id': EXECUTION_ID,
+                'message': 'Check CloudWatch logs for details'
+            })
+        }
+
+# Lambda handler alias for AWS Lambda
+lambda_handler = main
