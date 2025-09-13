@@ -1,89 +1,229 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Amazon Connect Service Quota Monitor - Monitors Amazon Connect service quotas and sends alerts when utilization reaches threshold'
+Description: 'Enhanced Amazon Connect Service Quota Monitor - Comprehensive monitoring of 70+ Connect quotas with intelligent deployment and consolidated alerting'
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Monitoring Configuration"
+        Parameters:
+          - ThresholdPercentage
+          - ScheduleExpression
+          - NotificationEmail
+      - Label:
+          default: "Lambda Configuration"
+        Parameters:
+          - LambdaTimeout
+          - LambdaMemory
+          - LambdaRuntime
+          - DeploymentMethod
+      - Label:
+          default: "Storage Configuration"
+        Parameters:
+          - UseS3Storage
+          - S3BucketName
+          - UseDynamoDBStorage
+          - DynamoDBTableName
+      - Label:
+          default: "Network Configuration (Optional)"
+        Parameters:
+          - VpcId
+          - SubnetIds
+      - Label:
+          default: "Advanced Configuration"
+        Parameters:
+          - SNSTopicName
+          - CreateDeploymentBucket
+          - DeploymentBucketName
+    ParameterLabels:
+      ThresholdPercentage:
+        default: "Alert Threshold Percentage"
+      ScheduleExpression:
+        default: "Monitoring Schedule"
+      NotificationEmail:
+        default: "Notification Email Address"
+      LambdaTimeout:
+        default: "Lambda Timeout (seconds)"
+      LambdaMemory:
+        default: "Lambda Memory (MB)"
+      LambdaRuntime:
+        default: "Lambda Runtime Version"
+      DeploymentMethod:
+        default: "Lambda Deployment Method"
 
 Parameters:
   ThresholdPercentage:
     Type: Number
     Default: 80
-    Description: Percentage threshold for quota utilization alerts (default 80%)
+    Description: Percentage threshold for quota utilization alerts (1-99%)
     MinValue: 1
     MaxValue: 99
+    ConstraintDescription: Must be between 1 and 99
     
   LambdaTimeout:
     Type: Number
-    Default: 300
-    Description: Lambda function timeout in seconds
-    MinValue: 30
+    Default: 600
+    Description: Lambda function timeout in seconds (increased for comprehensive monitoring)
+    MinValue: 60
     MaxValue: 900
+    ConstraintDescription: Must be between 60 and 900 seconds
     
   LambdaMemory:
     Type: Number
-    Default: 256
-    Description: Lambda function memory in MB
-    MinValue: 128
+    Default: 512
+    Description: Lambda function memory in MB (increased for enhanced processing)
+    MinValue: 256
     MaxValue: 10240
+    ConstraintDescription: Must be between 256 and 10240 MB
+    
+  LambdaRuntime:
+    Type: String
+    Default: python3.12
+    AllowedValues: 
+      - python3.12
+      - python3.11
+      - python3.10
+    Description: Python runtime version for Lambda function
+    
+  DeploymentMethod:
+    Type: String
+    Default: 'placeholder'
+    AllowedValues: ['placeholder', 's3']
+    Description: Lambda deployment method - placeholder for initial deployment, s3 for large code packages
     
   ScheduleExpression:
     Type: String
     Default: rate(1 hour)
-    Description: Schedule expression for automated Lambda execution (e.g., rate(1 hour), rate(30 minutes), cron(0 8 * * ? *))
+    Description: Schedule expression for automated Lambda execution
+    AllowedPattern: '^(rate\([1-9][0-9]* (minute|minutes|hour|hours|day|days)\)|cron\(.+\))$'
+    ConstraintDescription: Must be a valid rate() or cron() expression
     
   UseS3Storage:
     Type: String
     Default: 'true'
     AllowedValues: ['true', 'false']
-    Description: Whether to use S3 for storing metrics and reports
+    Description: Enable S3 storage for metrics and reports
     
   UseDynamoDBStorage:
     Type: String
     Default: 'true'
     AllowedValues: ['true', 'false']
-    Description: Whether to use DynamoDB for storing metrics and reports
+    Description: Enable DynamoDB storage for metrics and reports
     
   S3BucketName:
     Type: String
     Default: ''
-    Description: (Optional) Name for the S3 bucket. Leave empty to auto-generate a name.
+    Description: (Optional) Custom S3 bucket name. Leave empty for auto-generated name.
+    AllowedPattern: '^$|^[a-z0-9][a-z0-9-]*[a-z0-9]$'
+    ConstraintDescription: Must be a valid S3 bucket name or empty
     
   DynamoDBTableName:
     Type: String
     Default: 'ConnectQuotaMonitor'
     Description: Name for the DynamoDB table
+    AllowedPattern: '^[a-zA-Z0-9_.-]+$'
+    ConstraintDescription: Must be a valid DynamoDB table name
     
   SNSTopicName:
     Type: String
     Default: 'ConnectQuotaAlerts'
     Description: Name for the SNS topic for alerts
+    AllowedPattern: '^[a-zA-Z0-9_-]+$'
+    ConstraintDescription: Must be a valid SNS topic name
     
   NotificationEmail:
     Type: String
     Default: ''
-    Description: (Optional) Email address to subscribe to the SNS topic for alerts
+    Description: (Optional) Email address for quota violation alerts
+    AllowedPattern: '^$|^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    ConstraintDescription: Must be a valid email address or empty
     
   VpcId:
     Type: String
     Default: ''
-    Description: (Optional) VPC ID for Lambda function deployment. Leave empty to deploy without VPC.
+    Description: (Optional) VPC ID for Lambda deployment in VPC
+    AllowedPattern: '^$|^vpc-[a-z0-9]+$'
+    ConstraintDescription: Must be a valid VPC ID or empty
     
   SubnetIds:
     Type: CommaDelimitedList
     Default: ''
-    Description: (Optional) Comma-delimited list of subnet IDs for Lambda function deployment. Required if VpcId is specified.
+    Description: (Optional) Subnet IDs for Lambda VPC deployment (required if VpcId specified)
+    
+  CreateDeploymentBucket:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: Create S3 bucket for Lambda deployment packages (recommended for large code)
+    
+  DeploymentBucketName:
+    Type: String
+    Default: ''
+    Description: (Optional) Custom deployment bucket name. Leave empty for auto-generated name.
+    AllowedPattern: '^$|^[a-z0-9][a-z0-9-]*[a-z0-9]$'
+    ConstraintDescription: Must be a valid S3 bucket name or empty
 
 Conditions:
+  # Storage conditions
   UseS3: !Equals [!Ref UseS3Storage, 'true']
   UseDynamoDB: !Equals [!Ref UseDynamoDBStorage, 'true']
   CreateS3Bucket: !And [!Equals [!Ref UseS3Storage, 'true'], !Equals [!Ref S3BucketName, '']]
   UseProvidedS3Bucket: !And [!Equals [!Ref UseS3Storage, 'true'], !Not [!Equals [!Ref S3BucketName, '']]]
+  
+  # Deployment conditions
+  CreateDeploymentBucket: !Equals [!Ref CreateDeploymentBucket, 'true']
+  UseProvidedDeploymentBucket: !Not [!Equals [!Ref DeploymentBucketName, '']]
+  UseS3Deployment: !Equals [!Ref DeploymentMethod, 's3']
+  
+  # Notification conditions
   SubscribeEmail: !Not [!Equals [!Ref NotificationEmail, '']]
+  
+  # Network conditions
   UseVPC: !Not [!Equals [!Ref VpcId, '']]
+  HasSubnets: !Not [!Equals [!Join ['', !Ref SubnetIds], '']]
+  
+  # Validation conditions
+  ValidVPCConfig: !Or [!Not [!Condition UseVPC], !Condition HasSubnets]
 
 Resources:
+  # S3 Bucket for Lambda deployment packages (for large code)
+  DeploymentS3Bucket:
+    Type: AWS::S3::Bucket
+    Condition: CreateDeploymentBucket
+    DeletionPolicy: Retain
+    Properties:
+      BucketName: !If 
+        - UseProvidedDeploymentBucket
+        - !Ref DeploymentBucketName
+        - !Sub "connectquotamonitor-deploy-${AWS::AccountId}-${AWS::Region}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldDeploymentPackages
+            Status: Enabled
+            ExpirationInDays: 30
+            NoncurrentVersionExpirationInDays: 7
+      VersioningConfiguration:
+        Status: Enabled
+      Tags:
+        - Key: Purpose
+          Value: ConnectQuotaMonitorDeployment
+        - Key: ManagedBy
+          Value: CloudFormation
+
   # KMS Key for SNS Topic encryption
   SNSKMSKey:
     Type: AWS::KMS::Key
     Properties:
-      Description: KMS key for SNS topic encryption
+      Description: KMS key for SNS topic encryption - Connect Quota Monitor
       KeyPolicy:
         Statement:
           - Sid: Enable IAM User Permissions
@@ -298,10 +438,11 @@ Resources:
               - !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamoDBTableName}/index/*"
 
   # IAM Role for Lambda function
+  # Enhanced IAM Role for Lambda function with comprehensive Connect permissions
   LambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "${AWS::StackName}-LambdaRole"
+      RoleName: !Sub "${AWS::StackName}-EnhancedLambdaRole"
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -315,90 +456,189 @@ Resources:
         - !If [UseS3, !Ref S3StoragePolicy, !Ref 'AWS::NoValue']
         - !If [UseDynamoDB, !Ref DynamoDBStoragePolicy, !Ref 'AWS::NoValue']
       Policies:
-        - PolicyName: ConnectQuotaMonitorPolicy
+        - PolicyName: EnhancedConnectQuotaMonitorPolicy
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              - Effect: Allow
+              # Core Amazon Connect permissions
+              - Sid: ConnectCorePermissions
+                Effect: Allow
                 Action:
                   - connect:ListInstances
                   - connect:ListUsers
                   - connect:ListQueues
                   - connect:ListPhoneNumbers
+                  - connect:ListPhoneNumbersV2
                   - connect:ListHoursOfOperations
                   - connect:ListContactFlows
+                  - connect:ListContactFlowModules
                   - connect:ListRoutingProfiles
                   - connect:ListSecurityProfiles
                   - connect:ListQuickConnects
-                  - connect:DescribeUserHierarchyStructure
                   - connect:ListAgentStatuses
                   - connect:ListPrompts
-                  - connect:ListTasks
                   - connect:ListTaskTemplates
                   - connect:ListEvaluationForms
-                  - connect:ListPhoneNumbersV2
+                  - connect:ListLambdaFunctions
+                  - connect:ListBots
+                  - connect:ListIntegrationAssociations
+                  - connect:ListPredefinedAttributes
+                  - connect:DescribeUserHierarchyStructure
                 Resource: '*'
-              - Effect: Allow
+              
+              # Directory Service permissions (required for Connect instance discovery)
+              - Sid: DirectoryServicePermissions
+                Effect: Allow
                 Action:
-                  - connectcases:ListDomains
-                  - connectcases:ListFields
-                  - connectcases:ListTemplates
+                  - ds:DescribeDirectories
                 Resource: '*'
-              - Effect: Allow
+              
+              # Connect Cases permissions
+              - Sid: ConnectCasesPermissions
+                Effect: Allow
+                Action:
+                  - cases:ListDomains
+                  - cases:ListFields
+                  - cases:ListTemplates
+                  - cases:ListLayouts
+                Resource: '*'
+              
+              # Customer Profiles permissions
+              - Sid: CustomerProfilesPermissions
+                Effect: Allow
                 Action:
                   - profile:ListDomains
                   - profile:ListProfileObjectTypes
+                  - profile:ListIntegrations
                 Resource: '*'
-              - Effect: Allow
+              
+              # Voice ID permissions
+              - Sid: VoiceIDPermissions
+                Effect: Allow
                 Action:
                   - voiceid:ListDomains
                   - voiceid:ListSpeakers
                   - voiceid:ListFraudsters
+                  - voiceid:ListWatchlists
                 Resource: '*'
-              - Effect: Allow
+              
+              # Wisdom permissions
+              - Sid: WisdomPermissions
+                Effect: Allow
                 Action:
                   - wisdom:ListKnowledgeBases
-                  - wisdom:ListContent
+                  - wisdom:ListContents
+                  - wisdom:ListAssistants
                 Resource: '*'
-              - Effect: Allow
+              
+              # Connect Campaigns permissions
+              - Sid: ConnectCampaignsPermissions
+                Effect: Allow
                 Action:
                   - connect-campaigns:ListCampaigns
+                  - connect-campaigns:DescribeCampaign
                 Resource: '*'
-              - Effect: Allow
+              
+              # App Integrations permissions
+              - Sid: AppIntegrationsPermissions
+                Effect: Allow
+                Action:
+                  - appintegrations:ListApplications
+                  - appintegrations:ListDataIntegrations
+                  - appintegrations:ListEventIntegrations
+                Resource: '*'
+              
+              # Service Quotas permissions
+              - Sid: ServiceQuotasPermissions
+                Effect: Allow
                 Action:
                   - servicequotas:ListServiceQuotas
+                  - servicequotas:GetServiceQuota
+                  - servicequotas:ListServices
                 Resource: '*'
-              - Effect: Allow
+              
+              # CloudWatch permissions
+              - Sid: CloudWatchPermissions
+                Effect: Allow
                 Action:
                   - cloudwatch:GetMetricStatistics
+                  - cloudwatch:ListMetrics
+                  - cloudwatch:GetMetricData
                 Resource: '*'
-              - Effect: Allow
+              
+              # STS permissions for account ID
+              - Sid: STSPermissions
+                Effect: Allow
+                Action:
+                  - sts:GetCallerIdentity
+                Resource: '*'
+              
+              # SNS permissions
+              - Sid: SNSPermissions
+                Effect: Allow
                 Action:
                   - sns:Publish
                   - sns:GetTopicAttributes
+                  - sns:ListSubscriptionsByTopic
                 Resource: !Ref AlertSNSTopic
-              - Effect: Allow
+              
+              # SNS ListTopics permission (for client initialization)
+              - Sid: SNSListPermissions
+                Effect: Allow
+                Action:
+                  - sns:ListTopics
+                Resource: '*'
+              
+              # SQS Dead Letter Queue permissions
+              - Sid: SQSPermissions
+                Effect: Allow
                 Action:
                   - sqs:SendMessage
+                  - sqs:GetQueueAttributes
                 Resource: !GetAtt LambdaDeadLetterQueue.Arn
-              - Effect: Allow
+              
+              # KMS permissions for encryption
+              - Sid: KMSPermissions
+                Effect: Allow
                 Action:
                   - kms:Decrypt
                   - kms:GenerateDataKey
+                  - kms:DescribeKey
                 Resource: 
                   - !GetAtt LambdaKMSKey.Arn
                   - !GetAtt SNSKMSKey.Arn
+        
+        # DynamoDB KMS permissions (conditional)
         - !If
           - UseDynamoDB
           - PolicyName: DynamoDBKMSPolicy
             PolicyDocument:
               Version: '2012-10-17'
               Statement:
-                - Effect: Allow
+                - Sid: DynamoDBKMSPermissions
+                  Effect: Allow
                   Action:
                     - kms:Decrypt
                     - kms:GenerateDataKey
+                    - kms:DescribeKey
                   Resource: !GetAtt DynamoDBKMSKey.Arn
+          - !Ref 'AWS::NoValue'
+        
+        # Deployment bucket permissions (conditional)
+        - !If
+          - CreateDeploymentBucket
+          - PolicyName: DeploymentBucketPolicy
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Sid: DeploymentBucketPermissions
+                  Effect: Allow
+                  Action:
+                    - s3:GetObject
+                    - s3:ListBucket
+                  Resource:
+                    - !Sub "arn:aws:s3:::${DeploymentS3Bucket}/*"
+                    - !Sub "arn:aws:s3:::${DeploymentS3Bucket}"
           - !Ref 'AWS::NoValue'
 
 
@@ -460,16 +700,17 @@ Resources:
         - Key: Purpose
           Value: ConnectQuotaMonitorDLQ
 
-  # Lambda Function
+  # Enhanced Lambda Function with intelligent deployment support
   QuotaMonitorLambda:
     Type: AWS::Lambda::Function
     Properties:
-      FunctionName: !Sub "${AWS::StackName}-ConnectQuotaMonitor"
+      FunctionName: !Sub "${AWS::StackName}-EnhancedConnectQuotaMonitor"
       Handler: lambda_function.main
       Role: !GetAtt LambdaExecutionRole.Arn
-      Runtime: python3.9
+      Runtime: !Ref LambdaRuntime
       Timeout: !Ref LambdaTimeout
       MemorySize: !Ref LambdaMemory
+      ReservedConcurrentExecutions: 5  # Prevent excessive concurrent executions
       DeadLetterConfig:
         TargetArn: !GetAtt LambdaDeadLetterQueue.Arn
       KmsKeyArn: !GetAtt LambdaKMSKey.Arn
@@ -486,29 +727,94 @@ Resources:
           S3_BUCKET: !If [UseProvidedS3Bucket, !Ref S3BucketName, !If [CreateS3Bucket, !Ref MetricsS3Bucket, '']]
           USE_DYNAMODB: !Ref UseDynamoDBStorage
           DYNAMODB_TABLE: !Ref DynamoDBTableName
-      Code:
-        ZipFile: |
-          # Placeholder Lambda function
-          # The actual monitoring code should be deployed using the deployment script
-          import json
-          import logging
-          
-          logger = logging.getLogger()
-          logger.setLevel(logging.INFO)
-          
-          def main(event, context):
-              logger.info("Connect Quota Monitor placeholder function")
-              logger.info("Please deploy the actual monitoring code using:")
-              logger.info("1. The deploy.sh script, or")
-              logger.info("2. Update the function code manually")
-              
-              return {
-                  'statusCode': 200,
-                  'body': json.dumps({
-                      'message': 'Placeholder function - please deploy actual code',
-                      'instructions': 'Use deploy.sh script to update with monitoring code'
-                  })
-              }
+          USE_S3_STORAGE: !Ref UseS3Storage
+          DEPLOYMENT_METHOD: !Ref DeploymentMethod
+          DEPLOYMENT_BUCKET: !If [CreateDeploymentBucket, !Ref DeploymentS3Bucket, '']
+      Code: !If
+        - UseS3Deployment
+        - S3Bucket: !If [CreateDeploymentBucket, !Ref DeploymentS3Bucket, !Ref DeploymentBucketName]
+          S3Key: 'lambda-deployment.zip'
+        - ZipFile: |
+            # Enhanced Placeholder Lambda function for Connect Quota Monitor
+            # This is a placeholder that will be replaced with the actual monitoring code
+            import json
+            import logging
+            import os
+            from datetime import datetime
+            
+            logger = logging.getLogger()
+            logger.setLevel(logging.INFO)
+            
+            def main(event, context):
+                """
+                Enhanced placeholder function for Connect Quota Monitor.
+                This function provides information about the deployment and next steps.
+                """
+                logger.info("=== Enhanced Connect Quota Monitor Placeholder ===")
+                logger.info(f"Runtime: {context.invoked_function_arn.split(':')[3] if hasattr(context, 'invoked_function_arn') else 'Unknown'}")
+                logger.info(f"Function: {context.function_name if hasattr(context, 'function_name') else 'Unknown'}")
+                logger.info(f"Version: {context.function_version if hasattr(context, 'function_version') else 'Unknown'}")
+                
+                # Log environment configuration
+                config_info = {
+                    'threshold_percentage': os.environ.get('THRESHOLD_PERCENTAGE', '80'),
+                    'use_s3_storage': os.environ.get('USE_S3_STORAGE', 'false'),
+                    'use_dynamodb': os.environ.get('USE_DYNAMODB', 'false'),
+                    's3_bucket': os.environ.get('S3_BUCKET', 'Not configured'),
+                    'dynamodb_table': os.environ.get('DYNAMODB_TABLE', 'Not configured'),
+                    'deployment_method': os.environ.get('DEPLOYMENT_METHOD', 'placeholder'),
+                    'deployment_bucket': os.environ.get('DEPLOYMENT_BUCKET', 'Not configured')
+                }
+                
+                logger.info("Current Configuration:")
+                for key, value in config_info.items():
+                    logger.info(f"  {key}: {value}")
+                
+                # Provide deployment instructions
+                deployment_method = os.environ.get('DEPLOYMENT_METHOD', 'placeholder')
+                
+                if deployment_method == 's3':
+                    logger.info("DEPLOYMENT INSTRUCTIONS (S3 Method):")
+                    logger.info("1. Package your Lambda code into a ZIP file named 'lambda-deployment.zip'")
+                    logger.info(f"2. Upload the ZIP file to S3 bucket: {os.environ.get('DEPLOYMENT_BUCKET', 'deployment-bucket')}")
+                    logger.info("3. Update the Lambda function to use the S3 object")
+                    logger.info("4. The function will automatically use the new code")
+                else:
+                    logger.info("DEPLOYMENT INSTRUCTIONS (Direct Method):")
+                    logger.info("1. Use the deploy.sh script to update the function code")
+                    logger.info("2. Or manually update the function code via AWS CLI/Console")
+                    logger.info("3. Ensure the code includes the enhanced monitoring capabilities")
+                
+                logger.info("FEATURES READY FOR DEPLOYMENT:")
+                logger.info("✓ 70+ Connect quota monitoring")
+                logger.info("✓ Dynamic instance discovery")
+                logger.info("✓ Consolidated alerting")
+                logger.info("✓ Flexible storage (S3/DynamoDB)")
+                logger.info("✓ Multi-service support")
+                logger.info("✓ Enhanced security compliance")
+                
+                return {
+                    'statusCode': 200,
+                    'body': json.dumps({
+                        'message': 'Enhanced Connect Quota Monitor - Ready for deployment',
+                        'timestamp': datetime.utcnow().isoformat(),
+                        'deployment_method': deployment_method,
+                        'configuration': config_info,
+                        'next_steps': [
+                            'Deploy the actual monitoring code',
+                            'Test the monitoring functionality',
+                            'Verify alert delivery',
+                            'Check storage configuration'
+                        ]
+                    }, indent=2)
+                }
+      Tags:
+        - Key: Purpose
+          Value: EnhancedConnectQuotaMonitor
+        - Key: Version
+          Value: "2.0"
+        - Key: ManagedBy
+          Value: CloudFormation
 
   # CloudWatch Event Rule to trigger Lambda on schedule
   ScheduledRule:
@@ -533,21 +839,79 @@ Resources:
 
 Outputs:
   LambdaFunction:
-    Description: "Lambda function that monitors Connect quotas"
+    Description: "Enhanced Lambda function that monitors 70+ Connect quotas"
     Value: !Ref QuotaMonitorLambda
+    Export:
+      Name: !Sub "${AWS::StackName}-LambdaFunction"
+    
+  LambdaFunctionArn:
+    Description: "Lambda function ARN"
+    Value: !GetAtt QuotaMonitorLambda.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-LambdaFunctionArn"
     
   SNSTopicArn:
-    Description: "SNS topic ARN for alerts"
+    Description: "SNS topic ARN for consolidated alerts"
     Value: !Ref AlertSNSTopic
+    Export:
+      Name: !Sub "${AWS::StackName}-SNSTopicArn"
     
   S3BucketName:
-    Description: "S3 bucket for metrics and reports"
+    Description: "S3 bucket for metrics and reports storage"
     Value: !If [CreateS3Bucket, !Ref MetricsS3Bucket, !If [UseProvidedS3Bucket, !Ref S3BucketName, "Not using S3 storage"]]
     Condition: UseS3
+    Export:
+      Name: !Sub "${AWS::StackName}-S3BucketName"
     
   DynamoDBTableName:
-    Description: "DynamoDB table for metrics and reports"
+    Description: "DynamoDB table for metrics and reports storage"
     Value: !Ref DynamoDBTableName
+    Condition: UseDynamoDB
+    Export:
+      Name: !Sub "${AWS::StackName}-DynamoDBTableName"
+    
+  DeploymentBucketName:
+    Description: "S3 bucket for Lambda deployment packages"
+    Value: !Ref DeploymentS3Bucket
+    Condition: CreateDeploymentBucket
+    Export:
+      Name: !Sub "${AWS::StackName}-DeploymentBucketName"
+    
+  DeadLetterQueueUrl:
+    Description: "Dead Letter Queue URL for failed Lambda executions"
+    Value: !Ref LambdaDeadLetterQueue
+    Export:
+      Name: !Sub "${AWS::StackName}-DeadLetterQueueUrl"
+    
+  SecurityConfiguration:
+    Description: "Security features enabled in this deployment"
+    Value: "SNS KMS encryption, DynamoDB KMS encryption, Lambda environment encryption, Dead Letter Queue, S3 access logging, VPC support, Reserved concurrency"
+    
+  MonitoringCapabilities:
+    Description: "Enhanced monitoring capabilities"
+    Value: "70+ Connect quotas, Dynamic instance discovery, Consolidated alerting, Multi-service support, Flexible storage, Python 3.12 runtime"
+    
+  DeploymentInstructions:
+    Description: "Next steps for completing the deployment"
+    Value: !Sub |
+      1. Deploy monitoring code using deploy.sh script or manual update
+      2. ${DeploymentMethod} deployment method configured
+      3. Test function: aws lambda invoke --function-name ${QuotaMonitorLambda} --payload '{}' response.json
+      4. Monitor logs: aws logs tail /aws/lambda/${QuotaMonitorLambda} --follow
+      5. Subscribe to alerts: aws sns subscribe --topic-arn ${AlertSNSTopic} --protocol email --notification-endpoint your-email@example.com
+    
+  StackConfiguration:
+    Description: "Current stack configuration summary"
+    Value: !Sub |
+      Stack: ${AWS::StackName}
+      Region: ${AWS::Region}
+      Runtime: ${LambdaRuntime}
+      Threshold: ${ThresholdPercentage}%
+      Schedule: ${ScheduleExpression}
+      S3 Storage: ${UseS3Storage}
+      DynamoDB Storage: ${UseDynamoDBStorage}
+      VPC Deployment: ${VpcId}
+      Deployment Method: ${DeploymentMethod}
     Condition: UseDynamoDB
     
   DeadLetterQueueUrl:

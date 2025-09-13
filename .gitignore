@@ -58,8 +58,12 @@ wheels/
 .installed.cfg
 *.egg
 
-# CloudFormation
-*.template
+# CloudFormation (keep main template)
+# *.template
+
+# S3 Deployment Artifacts
+deployment-*.zip
+s3-deployment-*
 
 # Backup Files
 *.bak
