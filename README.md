@@ -56,77 +56,56 @@ A comprehensive solution that monitors **70+ Amazon Connect service quotas** acr
 
 ## 📋 Prerequisites
 
+- **Terraform 1.5+** (or OpenTofu) installed locally
 - **AWS CLI** configured with appropriate permissions
 - **Amazon Connect instance(s)** in your AWS account
 - **Email address** for receiving alerts
-- **IAM permissions** for CloudFormation, Lambda, SNS, S3, DynamoDB, Connect
+- **IAM permissions** for Lambda, SNS, S3, DynamoDB, CloudWatch Events, and Amazon Connect
 
 ## 🚀 Deployment
 
-### Step 1: Prepare the Code Package
+### Terraform Deployment (Recommended)
 
-```bash
-# Create deployment package
-zip lambda-deployment.zip lambda_function.py
-```
+1. **Initialize Terraform**
 
-### Step 2: Deploy CloudFormation Stack
+   ```bash
+   cd terraform
+   terraform init
+   ```
 
-```bash
-aws cloudformation create-stack \
-  --stack-name ConnectQuotaMonitor \
-  --template-body file://connect-quota-monitor-cfn.yaml \
-  --capabilities CAPABILITY_NAMED_IAM \
-  --parameters \
-    ParameterKey=ThresholdPercentage,ParameterValue=80 \
-    ParameterKey=NotificationEmail,ParameterValue=your-email@company.com \
-    ParameterKey=UseS3Storage,ParameterValue=true \
-    ParameterKey=UseDynamoDBStorage,ParameterValue=true
-```
+2. **Review configuration** (optional)
 
-### Step 3: Deploy Lambda Code
+   ```bash
+   terraform plan \
+     -var "notification_email=your-email@company.com" \
+     -var "threshold_percentage=80"
+   ```
 
-```bash
-# Wait for stack creation to complete
-aws cloudformation wait stack-create-complete --stack-name ConnectQuotaMonitor
+3. **Apply the deployment**
 
-# Update Lambda function with actual code
-aws lambda update-function-code \
-  --function-name ConnectQuotaMonitor-EnhancedConnectQuotaMonitor \
-  --zip-file fileb://lambda-deployment.zip
-```
+   ```bash
+   terraform apply \
+     -var "notification_email=your-email@company.com" \
+     -var "threshold_percentage=80"
+   ```
 
-### Step 4: Verify Deployment
+4. **Verify the function**
 
-```bash
-# Test the function
-aws lambda invoke \
-  --function-name ConnectQuotaMonitor-EnhancedConnectQuotaMonitor \
-  --payload '{}' \
-  test-response.json
+   ```bash
+   aws lambda invoke \
+     --function-name connect-quota-monitor-EnhancedConnectQuotaMonitor \
+     --payload '{}' \
+     response.json
+   cat response.json
+   ```
 
-# Check the response
-cat test-response.json
-```
+The Terraform configuration recreates the full infrastructure defined in the original CloudFormation template, including KMS-encrypted SNS topics, optional S3/DynamoDB storage, IAM policies, and the scheduled Lambda function. All configuration options from the CloudFormation parameters are exposed as Terraform variables in `terraform/variables.tf`.
 
-### Alternative: Using the Deployment Script
+> **Note:** To deploy the Lambda code from an S3 bucket instead of the locally packaged Python file, set `-var "deployment_method=s3"` and provide `deployment_bucket_name` plus an uploaded `lambda-deployment.zip` object.
 
-```bash
-# Make script executable
-chmod +x deploy.sh
+### Legacy CloudFormation Deployment
 
-# Deploy with basic configuration
-./deploy.sh --email your-email@company.com --threshold 80
-
-# Deploy with advanced options
-./deploy.sh \
-  --email your-email@company.com \
-  --threshold 85 \
-  --runtime python3.12 \
-  --memory 1024 \
-  --vpc-id vpc-12345678 \
-  --subnet-ids subnet-123,subnet-456
-```
+The original CloudFormation template (`connect-quota-monitor-cfn.yaml`) and helper script (`deploy.sh`) remain available for backwards compatibility. Follow the previous instructions if you prefer the CloudFormation workflow.
 
 ## ⚙️ Configuration Parameters
 
