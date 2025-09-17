@@ -72,3 +72,9 @@ s3-deployment-*
 # Local Configuration
 config.local.*
 settings.local.*
+
+# Terraform build artifacts
+terraform/build/
+*.tfstate*
+.terraform/
+.terraform.lock.hcl

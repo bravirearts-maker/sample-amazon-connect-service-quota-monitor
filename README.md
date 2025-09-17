@@ -63,70 +63,85 @@ A comprehensive solution that monitors **70+ Amazon Connect service quotas** acr
 
 ## 🚀 Deployment
 
-### Step 1: Prepare the Code Package
+### Option 1: Terraform (recommended)
+
+The repository now includes a reusable Terraform module that mirrors the original CloudFormation template while packaging the Lambda function automatically. To deploy with Terraform:
+
+1. **Install Terraform** version 1.5.0 or newer.
+2. **Configure AWS credentials** (environment variables, shared credentials file, or AWS SSO).
+3. **Select a region** and review the configurable variables in [`terraform/variables.tf`](terraform/variables.tf).
 
 ```bash
-# Create deployment package
-zip lambda-deployment.zip lambda_function.py
+cd terraform
+
+# Initialise providers and download modules
+terraform init
+
+# Review the planned infrastructure
+terraform plan \
+  -var "region=us-east-1" \
+  -var "notification_email=your-email@company.com"
+
+# Deploy the quota monitor
+terraform apply \
+  -var "region=us-east-1" \
+  -var "notification_email=your-email@company.com"
 ```
 
-### Step 2: Deploy CloudFormation Stack
+Key variables:
 
-```bash
-aws cloudformation create-stack \
-  --stack-name ConnectQuotaMonitor \
-  --template-body file://connect-quota-monitor-cfn.yaml \
-  --capabilities CAPABILITY_NAMED_IAM \
-  --parameters \
-    ParameterKey=ThresholdPercentage,ParameterValue=80 \
-    ParameterKey=NotificationEmail,ParameterValue=your-email@company.com \
-    ParameterKey=UseS3Storage,ParameterValue=true \
-    ParameterKey=UseDynamoDBStorage,ParameterValue=true
-```
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `region` | - | AWS region for deployment |
+| `threshold_percentage` | 80 | Alert threshold (1-99%) |
+| `use_s3_storage` | true | Create or use an S3 bucket for reports |
+| `use_dynamodb_storage` | true | Create the DynamoDB metrics table |
+| `deployment_method` | `inline` | Use `inline` for direct uploads or `s3` to stage the ZIP in an S3 bucket |
+| `create_deployment_bucket` | true | Manage the deployment bucket from Terraform |
+| `notification_email` | "" | Optional SNS email subscription |
 
-### Step 3: Deploy Lambda Code
+Outputs such as the Lambda ARN, SNS topic ARN, and bucket names are displayed after `terraform apply` completes.
 
-```bash
-# Wait for stack creation to complete
-aws cloudformation wait stack-create-complete --stack-name ConnectQuotaMonitor
+### Option 2: CloudFormation and helper script
 
-# Update Lambda function with actual code
-aws lambda update-function-code \
-  --function-name ConnectQuotaMonitor-EnhancedConnectQuotaMonitor \
-  --zip-file fileb://lambda-deployment.zip
-```
+The original CloudFormation template and helper script remain available when Terraform is not an option.
 
-### Step 4: Verify Deployment
+1. **Package the Lambda function**
 
-```bash
-# Test the function
-aws lambda invoke \
-  --function-name ConnectQuotaMonitor-EnhancedConnectQuotaMonitor \
-  --payload '{}' \
-  test-response.json
+   ```bash
+   zip lambda-deployment.zip lambda_function.py
+   ```
 
-# Check the response
-cat test-response.json
-```
+2. **Deploy the CloudFormation stack**
 
-### Alternative: Using the Deployment Script
+   ```bash
+   aws cloudformation create-stack \
+     --stack-name ConnectQuotaMonitor \
+     --template-body file://connect-quota-monitor-cfn.yaml \
+     --capabilities CAPABILITY_NAMED_IAM \
+     --parameters \
+       ParameterKey=ThresholdPercentage,ParameterValue=80 \
+       ParameterKey=NotificationEmail,ParameterValue=your-email@company.com \
+       ParameterKey=UseS3Storage,ParameterValue=true \
+       ParameterKey=UseDynamoDBStorage,ParameterValue=true
+   ```
 
-```bash
-# Make script executable
-chmod +x deploy.sh
+3. **Upload the Lambda package**
 
-# Deploy with basic configuration
-./deploy.sh --email your-email@company.com --threshold 80
+   ```bash
+   aws cloudformation wait stack-create-complete --stack-name ConnectQuotaMonitor
 
-# Deploy with advanced options
-./deploy.sh \
-  --email your-email@company.com \
-  --threshold 85 \
-  --runtime python3.12 \
-  --memory 1024 \
-  --vpc-id vpc-12345678 \
-  --subnet-ids subnet-123,subnet-456
-```
+   aws lambda update-function-code \
+     --function-name ConnectQuotaMonitor-EnhancedConnectQuotaMonitor \
+     --zip-file fileb://lambda-deployment.zip
+   ```
+
+4. **(Optional) Deploy with the helper script**
+
+   ```bash
+   chmod +x deploy.sh
+   ./deploy.sh --email your-email@company.com --threshold 80
+   ```
 
 ## ⚙️ Configuration Parameters
 
